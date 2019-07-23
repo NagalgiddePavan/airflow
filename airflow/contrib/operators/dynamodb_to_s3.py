@@ -56,8 +56,12 @@ def _upload_file_to_s3(file_obj, bucket_name, s3_key_prefix):
 
 class S3Uploader(Process, LoggingMixin):
     """
-    Reads items from the queue, do some transformation, write to disk, upload to s3.
+    A process that reads items from the queue, does some transformation,
+    writes transformed records to files on disk and uploads files to s3.
 
+    :param item_queue: a queue that contains DynamoDB items
+    :param transform_func: a function that transforms items to bytes
+    :param file_size:
     """
 
     def __init__(self, item_queue, transform_func, file_size, s3_bucket_name, s3_key_prefix):
@@ -94,7 +98,9 @@ class S3Uploader(Process, LoggingMixin):
 
 class DynamoDBScanner(Process, LoggingMixin):
     """
-    Scan DynamoDB table and put items in a queue.
+    A process that scans DynamoDB table and put items in a queue.
+
+
     """
 
     def __init__(self, table_name, scan_kwargs, item_queue):
@@ -124,6 +130,8 @@ class DynamoDBScanner(Process, LoggingMixin):
 class DynamoDBToS3Operator(BaseOperator):
     """
     Scans a DynamoDB table and replicate the records to S3.
+
+    https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/dynamodb.html#DynamoDB.Table.scan
 
     """
 
