@@ -18,6 +18,11 @@
 # under the License.
 #
 
+"""
+This operator scans a DynamoDB table, writes the records to
+a file on local filesystem, and upload the file to S3.
+"""
+
 from copy import copy
 from multiprocessing import Process, JoinableQueue
 from os.path import getsize
@@ -66,25 +71,29 @@ class S3Uploader(Process, LoggingMixin):
     def run(self):
         f = NamedTemporaryFile()
         try:
-            while True:
-                item = self.item_queue.get()
-                try:
-                    if item is None:
-                        self.log.debug('Got poisoned and die.')
-                        break
-                    f.write(self.transform_func(item))
-
-                finally:
-                    self.item_queue.task_done()
-
-                # Upload the file to S3 if reach file size limit
-                if getsize(f.name) >= self.file_size:
-                    _upload_file_to_s3(f, self.s3_bucket_name, self.s3_key_prefix)
-                    f.close()
-                    f = NamedTemporaryFile()
+            f = self._consume_records_and_upload_to_s3(f)
         finally:
             _upload_file_to_s3(f, self.s3_bucket_name, self.s3_key_prefix)
             f.close()
+
+    def _consume_records_and_upload_to_s3(self, f):
+        while True:
+            item = self.item_queue.get()
+            try:
+                if item is None:
+                    self.log.debug('Got poisoned and die.')
+                    break
+                f.write(self.transform_func(item))
+
+            finally:
+                self.item_queue.task_done()
+
+            # Upload the file to S3 if reach file size limit
+            if getsize(f.name) >= self.file_size:
+                _upload_file_to_s3(f, self.s3_bucket_name, self.s3_key_prefix)
+                f.close()
+                f = NamedTemporaryFile()
+        return f
 
 
 class DynamoDBScanner(Process, LoggingMixin):
@@ -117,6 +126,10 @@ class DynamoDBScanner(Process, LoggingMixin):
 
 
 class DynamoDBToS3Operator(BaseOperator):
+    """
+    Scans a DynamoDB table and replicate the records to S3.
+
+    """
 
     def __init__(self,
                  dynamodb_table_name,
