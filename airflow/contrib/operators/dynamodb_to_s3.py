@@ -24,7 +24,7 @@ from os.path import getsize
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
-from boto.compat import json
+from boto.compat import json  # type: ignore
 
 from airflow.contrib.hooks.aws_dynamodb_hook import AwsDynamoDBHook
 from airflow.hooks.S3_hook import S3Hook
