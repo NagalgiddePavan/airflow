@@ -117,7 +117,6 @@ class DynamoDBScanner(Process, LoggingMixin):
             items = response['Items']
             for item in items:
                 self.item_queue.put(item)
-                self.log.info(item)
 
             if 'LastEvaluatedKey' not in response:
                 # no more items to scan
@@ -192,12 +191,12 @@ class DynamoDBToS3Operator(BaseOperator):
 
             self.dynamodb_scanner.terminate()
             self.dynamodb_scanner.join()
+            # clean up S3 files
             raise
         finally:
             for s3_uploader in self.s3_uploaders:
                 s3_uploader.join()
             self.dynamodb_scanner.join()
-            # TODO: Cleanup the S3 files...
 
     def on_kill(self):
         for s3_uploader in self.s3_uploaders:
