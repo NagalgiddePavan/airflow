@@ -31,7 +31,7 @@ from airflow.contrib.operators.dynamodb_to_s3 import (
     _convert_item_to_json_bytes,
     DynamoDBToS3Operator,
 )
-
+from airflow.exceptions import AirflowException
 
 class DynamodbToS3Test(unittest.TestCase):
 
@@ -138,3 +138,60 @@ class DynamodbToS3Test(unittest.TestCase):
         dynamodb_to_s3_operator.execute(context={})
 
         self.assertEqual([{'a': 1}, {'b': 2}, {'c': 3}], self.output_queue_to_list())
+
+    @patch('airflow.contrib.operators.dynamodb_to_s3.S3Hook')
+    @patch('airflow.contrib.operators.dynamodb_to_s3.AwsDynamoDBHook')
+    def test_dynamodb_scan_failed(self, mock_aws_dynamodb_hook, mock_s3_hook):
+        responses = [
+            {
+                'Items': [{'a': 1}, {'b': 2}],
+                'LastEvaluatedKey': '123',
+            },
+            Exception('DynamoDB failed'),
+        ]
+        table = MagicMock()
+        table.return_value.scan.side_effect = responses
+        mock_aws_dynamodb_hook.return_value.get_conn.return_value.Table = table
+
+        s3_client = MagicMock()
+        s3_client.return_value.upload_file = self.mock_upload_file_func
+        mock_s3_hook.return_value.get_conn = s3_client
+
+        dynamodb_to_s3_operator = DynamoDBToS3Operator(
+            task_id='dynamodb_to_s3',
+            dynamodb_table_name='airflow_rocks',
+            s3_bucket_name='airflow-bucket',
+            file_size=4000,
+        )
+        with self.assertRaises(AirflowException):
+            dynamodb_to_s3_operator.execute(context={})
+
+    @patch('airflow.contrib.operators.dynamodb_to_s3.S3Hook')
+    @patch('airflow.contrib.operators.dynamodb_to_s3.AwsDynamoDBHook')
+    def test_s3_upload_failed(self, mock_aws_dynamodb_hook, mock_s3_hook):
+        responses = [
+            {
+                'Items': [{'a': 1}, {'b': 2}],
+                'LastEvaluatedKey': '123',
+            },
+            {
+                'Items': [{'c': 3}],
+            },
+        ]
+        table = MagicMock()
+        table.return_value.scan.side_effect = responses
+        mock_aws_dynamodb_hook.return_value.get_conn.return_value.Table = table
+
+        s3_client = MagicMock()
+        s3_error_message = 'S3 upload failed.'
+        s3_client.return_value.upload_file.side_effect = Exception(s3_error_message)
+        mock_s3_hook.return_value.get_conn = s3_client
+
+        dynamodb_to_s3_operator = DynamoDBToS3Operator(
+            task_id='dynamodb_to_s3',
+            dynamodb_table_name='airflow_rocks',
+            s3_bucket_name='airflow-bucket',
+            file_size=4000,
+        )
+        with self.assertRaisesRegex(AirflowException, s3_error_message):
+            dynamodb_to_s3_operator.execute(context={})

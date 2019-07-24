@@ -24,7 +24,7 @@ DynamoDB table to S3.
 """
 
 from copy import copy
-from multiprocessing import Process, JoinableQueue
+from multiprocessing import Process, JoinableQueue, Queue
 from os.path import getsize
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
@@ -32,6 +32,7 @@ from uuid import uuid4
 from boto.compat import json  # type: ignore
 
 from airflow.contrib.hooks.aws_dynamodb_hook import AwsDynamoDBHook
+from airflow.exceptions import AirflowException
 from airflow.hooks.S3_hook import S3Hook
 from airflow.utils.log.logging_mixin import LoggingMixin
 from airflow.models.baseoperator import BaseOperator
@@ -64,15 +65,16 @@ class S3Uploader(Process, LoggingMixin):
     :param file_size:
     """
 
-    def __init__(self, item_queue, transform_func, file_size, s3_bucket_name, s3_key_prefix):
+    def __init__(self, item_queue, transform_func, file_size, s3_bucket_name, s3_key_prefix, error_queue):
         super(S3Uploader, self).__init__()
         self.item_queue = item_queue
         self.transform_func = transform_func
         self.file_size = file_size
         self.s3_bucket_name = s3_bucket_name
         self.s3_key_prefix = s3_key_prefix
+        self.error_queue = error_queue
 
-    def run(self):
+    def _run(self):
         f = NamedTemporaryFile()
         try:  # pylint: disable=R1702
             while True:
@@ -95,6 +97,12 @@ class S3Uploader(Process, LoggingMixin):
             _upload_file_to_s3(f, self.s3_bucket_name, self.s3_key_prefix)
             f.close()
 
+    def run(self):
+        try:
+            self._run()
+        except Exception as e:
+            self.error_queue.put(e)
+
 
 class DynamoDBScanner(Process, LoggingMixin):
     """
@@ -103,13 +111,14 @@ class DynamoDBScanner(Process, LoggingMixin):
 
     """
 
-    def __init__(self, table_name, scan_kwargs, item_queue):
+    def __init__(self, table_name, scan_kwargs, item_queue, error_queue):
         super(DynamoDBScanner, self).__init__()
         self.table_name = table_name
         self.scan_kwargs = scan_kwargs
         self.item_queue = item_queue
+        self.error_queue = error_queue
 
-    def run(self):
+    def _run(self):
         table = AwsDynamoDBHook().get_conn().Table(self.table_name)
         scan_kwargs = copy(self.scan_kwargs) if self.scan_kwargs else {}
         while True:
@@ -124,6 +133,12 @@ class DynamoDBScanner(Process, LoggingMixin):
 
             last_evaluated_key = response['LastEvaluatedKey']
             scan_kwargs['ExclusiveStartKey'] = last_evaluated_key
+
+    def run(self):
+        try:
+            self._run()
+        except Exception as e:
+            self.error_queue.put(e)
 
 
 class DynamoDBToS3Operator(BaseOperator):
@@ -158,11 +173,13 @@ class DynamoDBToS3Operator(BaseOperator):
 
     def execute(self, context):
         item_queue = JoinableQueue(maxsize=self.max_queue_len)
+        error_queue = Queue()
         try:
             self.dynamodb_scanner = DynamoDBScanner(
                 table_name=self.dynamodb_table_name,
                 scan_kwargs=self.dynamodb_scan_kwargs,
                 item_queue=item_queue,
+                error_queue=error_queue,
             )
             self.dynamodb_scanner.start()
 
@@ -173,6 +190,7 @@ class DynamoDBToS3Operator(BaseOperator):
                     file_size=self.file_size,
                     s3_bucket_name=self.s3_bucket_name,
                     s3_key_prefix=self.s3_key_prefix,
+                    error_queue=error_queue,
                 )
                 s3_uploader.start()
                 self.s3_uploaders.append(s3_uploader)
@@ -185,14 +203,24 @@ class DynamoDBToS3Operator(BaseOperator):
                 item_queue.put(None)
 
             item_queue.join()
-        except Exception:
+
+            for s3_uploader in self.s3_uploaders:
+                s3_uploader.join()
+
+            # TODO: investigate how to fail fast
+            errors = []
+            while not error_queue.empty():
+                errors.append(error_queue.get())
+            if errors:
+                raise AirflowException('Child processes failed.', errors)
+        except Exception as e:
             for s3_uploader in self.s3_uploaders:
                 s3_uploader.terminate()
 
             self.dynamodb_scanner.terminate()
             self.dynamodb_scanner.join()
             # clean up S3 files
-            raise
+            raise e
         finally:
             for s3_uploader in self.s3_uploaders:
                 s3_uploader.join()
