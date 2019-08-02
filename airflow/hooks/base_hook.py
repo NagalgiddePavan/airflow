@@ -21,12 +21,13 @@ import os
 import random
 from typing import Iterable
 
+from airflow.settings import conf
 from airflow.models import Connection
 from airflow.exceptions import AirflowException
 from airflow.utils.db import provide_session
 from airflow.utils.log.logging_mixin import LoggingMixin
 
-CONN_ENV_PREFIX = 'AIRFLOW_CONN_'
+CONN_ENV_PREFIX = conf.get(section='core', key='conn_env_prefix')
 
 
 class BaseHook(LoggingMixin):
@@ -37,6 +38,7 @@ class BaseHook(LoggingMixin):
     instances of these systems, and expose consistent methods to interact
     with them.
     """
+
     def __init__(self, source):
         pass
 
