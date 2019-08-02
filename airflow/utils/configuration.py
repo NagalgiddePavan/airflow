@@ -21,6 +21,8 @@ import os
 import json
 from tempfile import mkstemp
 
+from configparser import ConfigParser
+
 from airflow import configuration as conf
 
 
@@ -40,3 +42,20 @@ def tmp_configuration_copy(chmod=0o600, include_env=True, include_cmds=True):
         json.dump(cfg_dict, temp_file)
 
     return cfg_path
+
+
+def update_latest_by_user(cp_user: ConfigParser, cp_latest: ConfigParser):
+    """
+    Merge the user's config with latest config.
+    If there is a conflict, user's config is favored.
+
+    :param cp_user: user's airflow.cfg
+    :param cp_latest: latest airflow.cfg
+    """
+    cp_merge = cp_latest
+    for section in cp_user.sections():
+        if not cp_merge.has_section(section):
+            cp_merge.add_section(section)
+        for k, v in cp_user.items(section):
+            cp_merge.set(section, k, v)
+    return cp_merge

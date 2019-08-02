@@ -49,11 +49,14 @@ import psutil
 import re
 from urllib.parse import urlunparse
 from typing import Any
+from backports.configparser import ConfigParser
 
 import airflow
 from airflow import api
 from airflow import jobs, settings
 from airflow import configuration as conf
+from airflow.configuration import DEFAULT_CONFIG
+from airflow.utils.configuration import update_latest_by_user
 from airflow.exceptions import AirflowException, AirflowWebServerTimeout
 from airflow.executors import get_default_executor
 from airflow.models import (
@@ -1628,6 +1631,19 @@ def sync_perm(args):
             dag.access_control)
 
 
+@cli_utils.action_logging
+def cfg_upgrade(args):
+    input_cfg = ConfigParser()
+    input_cfg.read(args.input_file)
+    latest_cfg = ConfigParser()
+    latest_cfg.read_string(DEFAULT_CONFIG)
+
+    upgraded_cfg = update_latest_by_user(input_cfg, latest_cfg)
+
+    with open(args.output_file, 'w+') as f:
+        upgraded_cfg.write(f)
+
+
 class Arg:
     def __init__(self, flags=None, help=None, action=None, default=None, nargs=None,
                  type=None, choices=None, required=None, metavar=None):
@@ -2119,6 +2135,16 @@ class CLIFactory:
         'autoscale': Arg(
             ('-a', '--autoscale'),
             help="Minimum and Maximum number of worker to autoscale"),
+        'input_file': Arg(
+            ('-i', '--input-file'),
+            help='Input file path',
+            type=str,
+        ),
+        'output_file': Arg(
+            ('-o', '--output-file'),
+            help='Output file path',
+            type=str,
+        )
     }
     subparsers = (
         {
@@ -2505,6 +2531,19 @@ class CLIFactory:
                     'https://airflow.readthedocs.io/en/stable/howto/secure-connections.html'
                     '#rotating-encryption-keys.',
             'args': (),
+        },
+        {
+            'help': ' airflow.cfg',
+            'name': 'cfg',
+            'subcommands': (
+                {
+                    'func': cfg_upgrade,
+                    'name': 'upgrade',
+                    'help': 'Upgrade your airflow.cfg to latest version. '
+                            'It adds new fields with default value to your existing airflow.cfg ',
+                    'args': ('input_file', 'output_file',)
+                },
+            )
         },
     )
     subparsers_dict = {sp.get('name') or sp['func'].__name__: sp for sp in subparsers}
